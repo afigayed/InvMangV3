@@ -1,0 +1,138 @@
+
+import streamlit as st
+import qrcode
+from PIL import Image
+import os, json
+import pandas as pd
+import cv2, numpy as np
+
+st.set_page_config(layout="wide")
+DATA_FILE = "data.json"
+LOC_FILE = "locations.json"
+ITEMS_DIR = "Items"
+os.makedirs(ITEMS_DIR, exist_ok=True)
+
+if os.path.exists(DATA_FILE):
+    items = pd.read_json(DATA_FILE, orient="records")
+else:
+    items = pd.DataFrame(columns=["name", "location", "price", "misc", "barcode_img", "picture_path"])
+
+if os.path.exists(LOC_FILE):
+    locations = json.load(open(LOC_FILE))
+else:
+    locations = []
+
+st.session_state.setdefault("locations", locations)
+
+def save_items():
+    items.to_json(DATA_FILE, orient="records")
+
+def save_locations():
+    json.dump(st.session_state.locations, open(LOC_FILE, "w"))
+
+st.sidebar.header("📍 Manage Locations")
+
+new_loc = st.sidebar.text_input("Add new location")
+if st.sidebar.button("➕ Add"):
+    if new_loc and new_loc not in st.session_state.locations:
+        st.session_state.locations.append(new_loc)
+        save_locations()
+
+loc_to_delete = st.sidebar.selectbox("Delete location", [""] + st.session_state.locations)
+if st.sidebar.button("➖ Delete"):
+    if loc_to_delete:
+        st.session_state.locations.remove(loc_to_delete)
+        save_locations()
+
+st.header("📝 Enter or Update Item")
+
+with st.form("item_form"):
+    name = st.text_input("Item name")
+    loc = st.selectbox("Item location", [""] + st.session_state.locations)
+    price = st.number_input("Item price", min_value=0.0, step=0.01)
+    misc = st.text_area("Miscellaneous")
+    pic = st.file_uploader("Upload picture", type=["png", "jpg", "jpeg"])
+    submitted = st.form_submit_button("🔍 Search or Save")
+
+if submitted:
+    existing = items[items.name.str.lower() == name.lower()]
+
+    if not name:
+        st.error("Please enter an item name.")
+    elif not loc:
+        st.error("Please select a location.")
+    else:
+        if not existing.empty:
+            idx = existing.index[0]
+            items.at[idx, "location"] = loc
+            items.at[idx, "price"] = price
+            items.at[idx, "misc"] = misc
+            st.success(f"Updated existing item: '{name}'")
+        else:
+            barcode_img = qrcode.make(name)
+            barcode_path = os.path.join(ITEMS_DIR, f"{name}_barcode.png")
+            barcode_img.save(barcode_path)
+
+            picture_path = ""
+            if pic:
+                ext = os.path.splitext(pic.name)[1]
+                picture_path = os.path.join(ITEMS_DIR, f"{name}_pic{ext}")
+                with open(picture_path, "wb") as f:
+                    f.write(pic.read())
+
+            items.loc[len(items)] = {
+                "name": name,
+                "location": loc,
+                "price": price,
+                "misc": misc,
+                "barcode_img": barcode_path,
+                "picture_path": picture_path
+            }
+            st.success(f"Saved new item: '{name}'")
+
+        save_items()
+
+st.header("🔎 Item Lookup & Actions")
+
+search = st.text_input("Search item by name")
+if st.button("Search"):
+    results = items[items.name.str.contains(search, case=False)] if search else items
+    st.dataframe(results[["name", "location", "price", "misc"]], use_container_width=True)
+
+    for i, row in results.iterrows():
+        st.subheader(row["name"])
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.image(row["barcode_img"], caption="Barcode", use_container_width=True)
+            if st.button(f"Print Barcode - {row['name']}"):
+                st.write(f"**Print Path:** {row['barcode_img']}")
+
+        with col2:
+            if row["picture_path"] and os.path.exists(row["picture_path"]):
+                st.image(row["picture_path"], caption="Uploaded Picture", use_container_width=True)
+
+        st.write(f"**Location:** {row['location']}")
+        st.write(f"**Price:** ${row['price']:.2f}")
+        st.write(f"**Misc:** {row['misc']}")
+
+st.header("📷 Scan Barcode")
+img_file = st.camera_input("Scan QR Code")
+
+if img_file:
+    image_bytes = np.frombuffer(img_file.getvalue(), np.uint8)
+    img_array = cv2.imdecode(image_bytes, cv2.IMREAD_COLOR)
+    detector = cv2.QRCodeDetector()
+    data, _, _ = detector.detectAndDecode(img_array)
+
+    if data:
+        st.success(f"Scanned Data: {data}")
+        found = items[items.name == data]
+        if not found.empty:
+            item_info = found.iloc[0]
+            st.write("### Found Item Info:")
+            st.write(item_info[["name", "location", "price", "misc"]].to_dict())
+        else:
+            st.warning("Item not found. You can enter it manually above.")
+    else:
+        st.error("No QR code detected.")
