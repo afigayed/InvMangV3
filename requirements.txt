@@ -1,5 +1,10 @@
 streamlit
-qrcode
-pillow
+numpy
 opencv-python
+pillow
 pandas
+matplotlib
+pyzbar
+python-barcode
+qrcode
+scipy
